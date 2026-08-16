@@ -1,0 +1,25 @@
+{:paths ["src" "resources" "target"]
+
+ :deps  {org.clojure/clojure       {:mvn/version "1.12.5"}
+         org.clojure/clojurescript {:mvn/version "1.12.145"}
+         com.bhauman/figwheel-main {:mvn/version "0.2.20"}}
+
+ :aliases
+ {;; The interesting one: an nREPL server that boots the figwheel build and
+  ;; hands every session that connects its own ClojureScript REPL on that build.
+  ;;
+  ;;   clojure -M:nrepl          ; build "dev" on port 7888
+  ;;   clojure -M:nrepl dev 7888 ; explicit
+  :nrepl
+  {:extra-paths ["dev"]
+   :extra-deps  {nrepl/nrepl      {:mvn/version "1.7.0"}
+                 cider/piggieback {:mvn/version "0.7.0"}}
+   :main-opts   ["-m" "figintellij.nrepl"]}
+
+  ;; Plain terminal figwheel, for comparison / when you don't want nREPL.
+  :fig
+  {:main-opts ["-m" "figwheel.main" "-b" "dev" "-r"]}
+
+  ;; Production build.
+  :min
+  {:main-opts ["-m" "figwheel.main" "-O" "advanced" "-bo" "dev"]}}}

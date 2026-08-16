@@ -1,0 +1,14 @@
+/.cpcache
+/.nrepl-port
+/figwheel-main.log
+/.rebel_readline_history
+.idea/
+*.iml
+.claude/
+
+# `target` must exist before the JVM starts or it won't be on the classpath and
+# figwheel's compiled output will 404. Keep the directory, ignore the contents.
+/target/*
+!/target/public
+/target/public/*
+!/target/public/.gitkeep
