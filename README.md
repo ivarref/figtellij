@@ -125,8 +125,71 @@ message to reply to. It's reported on the server console and as an unsolicited
 [auto-cljs] attached session 490cf30e-… to figwheel build "dev"
 ```
 
-Clients that don't display session-level output will still see the ns change to
-`cljs.user` on their next evaluation.
+### Looking like a real ClojureScript REPL
+
+nREPL carries no signal for "this session changed language", so a client that
+recognises a ClojureScript REPL has to infer it from something. Two things are
+sent to help, both configurable.
+
+**The banner** (`:announce-banner?`, on). The session is given the output a
+terminal figwheel REPL prints when it starts — byte-for-byte identical to what
+`clojure -M:fig` produces, verified by diffing the two:
+
+```
+[Figwheel] Starting REPL
+Prompt will show when REPL connects to evaluation environment (i.e. a REPL hosting webpage)
+Figwheel Main Controls:
+          (figwheel.main/stop-builds id ...)  ;; stops Figwheel autobuilder for ids
+          …
+    Exit: :cljs/quit
+ Results: Stored in vars *1, *2, *3, *e holds last exception object
+ClojureScript 1.12.145
+cljs.user=>
+```
+
+Most of that is the controls banner piggieback already prints during the
+hand-off, which otherwise goes nowhere because the hand-off runs on a sink
+transport. Around it: `[Figwheel] Starting REPL` before, and the two lines
+`cljs.repl/repl*` would print as it takes over — the version and the
+`cljs.user=> ` prompt — after. Piggieback's parting `To quit, type: :cljs/quit`
+is stripped, since the terminal REPL doesn't print it.
+
+With the banner on, the `; auto-cljs: attached session …` note stays on the
+server console, so what the client sees is exactly the REPL output and nothing
+else.
+
+**The namespace** (`:announce-ns`). An unsolicited response carrying `:ns`, so a
+client that tracks the current namespace from responses can notice the switch
+without waiting for you to evaluate something. On the wire, right after the
+attach:
+
+```clojure
+{:session "418e455f-…" :out "; auto-cljs: attached session … to figwheel build \"dev\"\n"}
+{:session "418e455f-…" :ns  "cljs.user"}
+```
+
+The namespace is read out of piggieback's `cljs.analyzer/*cljs-ns*` in the
+session rather than assumed; `:announce-ns` is only the fallback if that can't
+be read, and `nil` turns the announcement off.
+
+nREPL has no notion of an unsolicited namespace change — `:ns` normally only
+rides along on a response to a request — so a client that only looks at replies
+to its own request ids will ignore this and see the change on its next
+evaluation instead. For those, `:announce-ns-id? true` additionally tags the
+message with the id of the last message the session completed:
+
+```clojure
+{:id "b2" :session "8bed7a91-…" :ns "cljs.user"}
+```
+
+That is a response arriving after its request already got `:status :done`, which
+is irregular enough to be off by default — try it if the plain announcement
+isn't picked up.
+
+Note that `*ns*` evaluates to `nil` in **any** ClojureScript REPL, including
+`clojure -M:fig` — it only exists at compile time in ClojureScript — so it isn't
+a signal a client can use to tell the two apart, and nothing here is going to
+change that.
 
 Three details in `auto_cljs.clj` are load-bearing, all documented in the source:
 
@@ -246,7 +309,10 @@ success and leaves you in ClojureScript.
                                ;   session seen when the nth never arrives
    :connect-timeout-ms 60000   ; how long to wait for a browser before giving up
    :attach-timeout-ms  60000   ; backstop on the hand-off itself
-   :busy-ttl-ms        60000}) ; when an in-flight eval stops counting as in-flight
+   :busy-ttl-ms        60000   ; when an in-flight eval stops counting as in-flight
+   :announce-banner?   true    ; emit the terminal figwheel REPL banner + prompt
+   :announce-ns        "cljs.user" ; report the ns switch to the client; nil = off
+   :announce-ns-id?    false}) ; also tag that report with the last message id
 ```
 
 Set `:enabled? false` to turn auto-attach off and drive piggieback manually.
@@ -295,5 +361,7 @@ second one (and a second connection still getting its own), a single-session
 connection staying on the JVM with the grace period off, a late-arriving second
 session still winning, `:attach-nth-session 1` flipping it, attaching a skipped
 session by hand, two sessions sharing one browser and compiler env, `:cljs/quit`
-and manual re-attach, the no-browser give-up and re-arm, and hot reload with
-`^:after-load`.
+and manual re-attach, the no-browser give-up and re-arm, hot reload with
+`^:after-load`, and — read off the raw wire — the startup banner diffed
+byte-for-byte against `clojure -M:fig`, the unsolicited `:ns "cljs.user"`
+announcement, its id-tagged variant, and their off switches.

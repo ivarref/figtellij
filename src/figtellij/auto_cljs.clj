@@ -56,6 +56,7 @@
   or set `:attach-nth-session nil` to attach every session."
   (:require
    [cider.piggieback :as piggieback]
+   [cljs.util :as cljs-util]
    [clojure.string :as str]
    [figwheel.main.api :as fig]
    [figwheel.repl :as fig-repl]
@@ -93,7 +94,23 @@
    ;; before the attach, and only to stop an interrupted evaluation — whose
    ;; completion nREPL reports out of band, where we can't see it — from parking
    ;; the watcher forever.
-   :busy-ttl-ms        60000})
+   :busy-ttl-ms        60000
+   ;; After attaching, send the session an unsolicited response carrying `:ns`,
+   ;; so a client that tracks the current namespace from responses notices the
+   ;; switch without waiting for the user to evaluate something. The value is the
+   ;; namespace to claim if piggieback's own can't be read; nil disables it.
+   ;; Reproduce, on the session, the output a terminal figwheel REPL prints when
+   ;; it starts — `[Figwheel] Starting REPL`, the controls banner, the
+   ;; ClojureScript version line and a `cljs.user=> ` prompt. nREPL carries no
+   ;; signal for "this session changed language", so a client that recognises a
+   ;; ClojureScript REPL by its banner needs to actually see one.
+   :announce-banner?   true
+   :announce-ns        "cljs.user"
+   ;; Also tag that message with the id of the last message the session
+   ;; completed, for clients that only look at replies to their own requests. It
+   ;; is a response arriving after its request was already done, so it is off
+   ;; unless the plain announcement turns out not to be enough.
+   :announce-ns-id?    false})
 
 (defonce ^:private config (atom defaults))
 
@@ -241,6 +258,66 @@
                                  :out     (str "; auto-cljs: " msg "\n")})
       (catch Throwable _))))
 
+(defn- out!
+  "Write to the session's output, with no message in flight to attach it to."
+  [st s]
+  (let [{:keys [transport session]} @st]
+    (try
+      (transport/send transport {:session (:id (meta session)) :out s})
+      (catch Throwable _))))
+
+(defn- cljs-ns
+  "The ClojureScript namespace piggieback left the session in. It tracks this in
+  `cljs.analyzer/*cljs-ns*` in the session map; the var is private to piggieback's
+  implementation namespace, so find it by name rather than reaching into it."
+  [session]
+  (some (fn [[k v]]
+          (when (and (var? k) (= '*cljs-ns* (:name (meta k)))) v))
+        @session))
+
+(defn- announce-banner!
+  "Finish the terminal-REPL banner on the session: the controls text that
+  piggieback's hand-off printed (which otherwise goes nowhere, since we run it on
+  a sink transport), then the two lines `cljs.repl/repl*` would print as it takes
+  over — `ClojureScript <version>` and the `cljs.user=> ` prompt.
+
+  `[Figwheel] Starting REPL` is sent before the hand-off, so the whole thing
+  arrives in the order `clojure -M:fig` produces it."
+  [st attach-out]
+  (when (:announce-banner? @config)
+    (out! st (str ;; piggieback signs off with a line `cljs.repl/repl*` never
+                  ;; prints; drop it so the banner matches `clojure -M:fig` byte
+                  ;; for byte
+                  (str/replace attach-out #"(?m)^To quit, type: :cljs/quit\R" "")
+                  "ClojureScript " (cljs-util/clojurescript-version) "\n"
+                  (or (cljs-ns (:session @st)) (:announce-ns @config)) "=> "))))
+
+(defn- announce-ns!
+  "Tell the client that the session's namespace is now the ClojureScript one.
+
+  The hand-off happens while the session is quiet, so it is not a reply to
+  anything the client sent, and nREPL has no notion of an unsolicited namespace
+  change — the `:ns` key normally only ever rides along on a response to a
+  request. Clients that track the current namespace from any response for their
+  session will pick this up; ones that only look at replies to their own request
+  ids won't, and will see the change on their next evaluation instead.
+
+  `:announce-ns-id?` additionally tags the message with the id of the last
+  message the session completed, for clients in the second group. That is a
+  response arriving after its request already got `:status :done`, which is
+  irregular enough to be off by default."
+  [st]
+  (when-let [fallback (:announce-ns @config)]
+    (let [{:keys [transport session last-msg-id]} @st]
+      (try
+        (transport/send
+         transport
+         (cond-> {:session (:id (meta session))
+                  :ns      (str (or (cljs-ns session) fallback))}
+           (and (:announce-ns-id? @config) last-msg-id)
+           (assoc :id last-msg-id)))
+        (catch Throwable _)))))
+
 ;; ---------------------------------------------------------------------------
 ;; the hand-off
 
@@ -311,11 +388,19 @@
           :owner
           (do
             (swap! st assoc :phase :attaching)
+            (when (:announce-banner? @config)
+              (out! st "[Figwheel] Starting REPL\n"))
             (let [out (attach! h session build-id attach-timeout-ms)]
               (swap! st assoc :phase :done)
               (if (cljs-session? session)
-                (notify! st (format "attached session %s to figwheel build %s"
-                                    (:id (meta session)) (pr-str build-id)))
+                (let [msg (format "attached session %s to figwheel build %s"
+                                  (:id (meta session)) (pr-str build-id))]
+                  ;; With the banner on this stays on the console, so what the
+                  ;; client sees is exactly what `clojure -M:fig` prints and
+                  ;; nothing else.
+                  (if (:announce-banner? @config) (log! msg) (notify! st msg))
+                  (announce-banner! st out)
+                  (announce-ns! st))
                 (notify! st (format "could not attach to build %s, staying in Clojure: %s"
                                     (pr-str build-id) out)))
               :attached)))))))
@@ -434,13 +519,14 @@
   it has been quiet for `:quiet-ms`. `:cljs/quit` drops a session back to Clojure
   for good; re-attach by hand with `(figwheel.main.api/cljs-repl \"dev\")`."
   [h]
-  (fn [{:keys [session op code transport] :as msg}]
+  (fn [{:keys [session op code transport id] :as msg}]
     (if-not (and (:enabled? @config) session (persistent-session? session))
       (h msg)
       (let [st (watch-state session)]
         (swap! st assoc
                :h h :session session :transport transport
-               :last-activity (now))
+               :last-activity (now)
+               :last-msg-id (or id (:last-msg-id @st)))
         (register-session! transport session)
         (when (= :idle (:phase @st))
           (arm! st))

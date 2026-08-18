@@ -4,9 +4,6 @@
 
 (defonce app-state (atom {:reloads 0}))
 
-
-
-
 (defn render! []
   (when-let [el (.getElementById js/document "app")]
     (set! (.-textContent el)
