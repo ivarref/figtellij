@@ -7,7 +7,7 @@
 (defn render! []
   (when-let [el (.getElementById js/document "app")]
     (set! (.-textContent el)
-          (str "phew? figtellij — hot reloads: " (:reloads @app-state)))))
+          (str "figtellij — hot reloads: " (:reloads @app-state)))))
 
 (defn ^:after-load on-reload []
   (swap! app-state update :reloads inc)

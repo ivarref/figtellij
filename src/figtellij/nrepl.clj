@@ -42,6 +42,6 @@
       (doto (io/file ".nrepl-port")
         (spit (:port server))
         (.deleteOnExit))
-      (println (format "\nnREPL server on port %d — sessions auto-attach to figwheel build %s"
+      (println (format "\nfigtellij nREPL server on port %d — sessions auto-attach to figwheel build %s"
                        (:port server) (pr-str build)))
       @(promise))))

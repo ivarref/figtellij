@@ -83,7 +83,7 @@ is what makes the "later clients" half possible:
   usable when you start non-blocking. So the boot only brings up the server,
   watcher and build registry entry.
 
-- **Per session**, `figintellij.auto-cljs` runs `(figwheel.main.api/cljs-repl "dev")`
+- **Per session**, `figtellij.auto-cljs` runs `(figwheel.main.api/cljs-repl "dev")`
   once the session has gone quiet (see below). That is the same call the terminal
   REPL ends up making: `figwheel.main/repl` detects nREPL and delegates to
   `cider.piggieback/cljs-repl`, passing the build's repl-env **and its
@@ -158,10 +158,12 @@ With the banner on, the `; auto-cljs: attached session …` note stays on the
 server console, so what the client sees is exactly the REPL output and nothing
 else.
 
-**The namespace** (`:announce-ns`). An unsolicited response carrying `:ns`, so a
-client that tracks the current namespace from responses can notice the switch
-without waiting for you to evaluate something. On the wire, right after the
-attach:
+**The namespace** (`:announce-ns`) — **off**. An unsolicited response carrying
+`:ns`, so a client that tracks the current namespace from responses could notice
+the switch without waiting for you to evaluate something. Cursive ignored it, and
+an unsolicited `:ns` is irregular enough not to send on the off chance, so it is
+disabled; set `:announce-ns "cljs.user"` to turn it back on. When enabled it
+looks like this on the wire, right after the attach:
 
 ```clojure
 {:session "418e455f-…" :out "; auto-cljs: attached session … to figwheel build \"dev\"\n"}
@@ -208,6 +210,29 @@ Three details in `auto_cljs.clj` are load-bearing, all documented in the source:
    `wait-for-connection` (a sleep loop with no escape) until one is attached.
    That waiting happens on the watcher thread, so it never ties up one of
    nREPL's handler threads or delays the client's own messages.
+
+### Unreadable browser messages
+
+`figwheel.repl/receive-message!` reads every message the browser sends with
+`clojure.edn/read-string`. When that throws, figwheel catches it and pprints the
+whole `Throwable->map` — roughly 200 lines of Jetty stack frames — then carries
+on. Nothing is broken, but on a hot reload it buries the console and reads as a
+crash.
+
+`figtellij.ws-guard` replaces that with one line:
+
+```
+[figtellij] dropped an unreadable message from the browser (60 chars): Invalid number: 962362af-…
+[figtellij] wrote it to target/figtellij-unreadable-ws-message.txt — please attach that file to a bug report
+```
+
+The exception only ever says what the reader choked on, never what it was
+reading, so the first unreadable message of each run is written out whole.
+
+**This makes the failure legible; it does not make it go away.** The message is
+still dropped, exactly as before. If it was the browser's response to a reload,
+figwheel is still waiting on a promise that will never be delivered and the
+reload will time out. The dump file is what identifies the real cause.
 
 If no browser is connected, the watcher polls for `:connect-timeout-ms` (60s),
 then says so and stops:
@@ -311,7 +336,7 @@ success and leaves you in ClojureScript.
    :attach-timeout-ms  60000   ; backstop on the hand-off itself
    :busy-ttl-ms        60000   ; when an in-flight eval stops counting as in-flight
    :announce-banner?   true    ; emit the terminal figwheel REPL banner + prompt
-   :announce-ns        "cljs.user" ; report the ns switch to the client; nil = off
+   :announce-ns        nil     ; off; set to "cljs.user" to also send an :ns message
    :announce-ns-id?    false}) ; also tag that report with the last message id
 ```
 

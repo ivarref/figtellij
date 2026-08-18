@@ -95,17 +95,19 @@
    ;; completion nREPL reports out of band, where we can't see it — from parking
    ;; the watcher forever.
    :busy-ttl-ms        60000
-   ;; After attaching, send the session an unsolicited response carrying `:ns`,
-   ;; so a client that tracks the current namespace from responses notices the
-   ;; switch without waiting for the user to evaluate something. The value is the
-   ;; namespace to claim if piggieback's own can't be read; nil disables it.
    ;; Reproduce, on the session, the output a terminal figwheel REPL prints when
    ;; it starts — `[Figwheel] Starting REPL`, the controls banner, the
    ;; ClojureScript version line and a `cljs.user=> ` prompt. nREPL carries no
    ;; signal for "this session changed language", so a client that recognises a
-   ;; ClojureScript REPL by its banner needs to actually see one.
+   ;; ClojureScript REPL by its banner needs to actually see one. This is what
+   ;; Cursive picks up on.
    :announce-banner?   true
-   :announce-ns        "cljs.user"
+   ;; Off. Sends the session an unsolicited response carrying `:ns` after
+   ;; attaching, for a client that tracks the current namespace from responses.
+   ;; Cursive ignored it, and an unsolicited `:ns` is irregular enough that it is
+   ;; not worth sending on the off chance. Set to a namespace name to re-enable;
+   ;; the value is only the fallback used when piggieback's own can't be read.
+   :announce-ns        nil
    ;; Also tag that message with the id of the last message the session
    ;; completed, for clients that only look at replies to their own requests. It
    ;; is a response arriving after its request was already done, so it is off
@@ -290,7 +292,7 @@
                   ;; for byte
                   (str/replace attach-out #"(?m)^To quit, type: :cljs/quit\R" "")
                   "ClojureScript " (cljs-util/clojurescript-version) "\n"
-                  (or (cljs-ns (:session @st)) (:announce-ns @config)) "=> "))))
+                  (or (cljs-ns (:session @st)) 'cljs.user) "=> "))))
 
 (defn- announce-ns!
   "Tell the client that the session's namespace is now the ClojureScript one.
