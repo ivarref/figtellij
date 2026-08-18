@@ -1,1 +1,4 @@
-{:main figtellij.core}
+{:main     figtellij.core
+ ;; figtellij.print-fix works around a figwheel.main bug where any `println` in
+ ;; the app produces an unreadable message on the server. See its docstring.
+ :preloads [figtellij.print-fix]}

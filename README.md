@@ -211,28 +211,45 @@ Three details in `auto_cljs.clj` are load-bearing, all documented in the source:
    That waiting happens on the watcher thread, so it never ties up one of
    nREPL's handler threads or delays the client's own messages.
 
-### Unreadable browser messages
+### `println` in the app, and unreadable browser messages
 
-`figwheel.repl/receive-message!` reads every message the browser sends with
-`clojure.edn/read-string`. When that throws, figwheel catches it and pprints the
-whole `Throwable->map` — roughly 200 lines of Jetty stack frames — then carries
-on. Nothing is broken, but on a hot reload it buries the console and reads as a
-crash.
+Any `println` in the ClojureScript app used to crash the server's message reader
+on every hot reload, with ~200 lines of Jetty stack frames ending in
+`Invalid number: 360c99d9-…`. It is a figwheel.main bug, and
+`figtellij.print-fix` (a `:preloads` entry in dev.cljs.edn) works around it.
 
-`figtellij.ws-guard` replaces that with one line:
+ClojureScript's `println` binds `*print-readably*` to false and calls
+`*print-fn*` from **inside** that binding:
+
+```clojure
+(defn println [& objs]
+  (binding [*print-readably* false]
+    (pr-with-opts objs nil))
+  ...)
+```
+
+Figwheel's print-fn forwards browser output to the server with
+`figwheel.repl/respond-to`, which serialises the message with `pr-str`. Still
+inside that binding, `pr-str` emits every string unquoted, so what arrives is not
+EDN:
 
 ```
-[figtellij] dropped an unreadable message from the browser (60 chars): Invalid number: 962362af-…
-[figtellij] wrote it to target/figtellij-unreadable-ws-message.txt — please attach that file to a bug report
+{:session-id 360c99d9-e05e-4170-abfd-d93901217950, :session-name Janina,
+ :response {:output true, :stream :out, :args [figtellij loaded]}}
 ```
 
-The exception only ever says what the reader choked on, never what it was
-reading, so the first unreadable message of each run is written out whole.
+`receive-message!` fails on the first bare token — the session id — and dumps the
+trace. The message is dropped, so if it was a reload response the reload hangs.
 
-**This makes the failure legible; it does not make it go away.** The message is
-still dropped, exactly as before. If it was the browser's response to a reload,
-figwheel is still waiting on a promise that will never be delivered and the
-reload will time out. The dump file is what identifies the real cause.
+The fix re-binds `*print-readably*` around `respond-to`, the one choke point
+every outgoing message passes through. Patching there rather than the
+`out-print`/`err-print` methods matters: `hook-repl-printing-output!` redefines
+those on every connection and would clobber a patch applied to them.
+
+Verified by hammering reloads with a browser attached: 10 unreadable messages out
+of 25 before, 0 out of 25 after. Nothing to do with the nREPL layer — it
+reproduces under plain `figwheel.main` in `:mode :serve` with no nREPL at all.
+Drop the namespace and the preload once figwheel.main fixes it upstream.
 
 If no browser is connected, the watcher polls for `:connect-timeout-ms` (60s),
 then says so and stops:

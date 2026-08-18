@@ -4,7 +4,8 @@
          org.clojure/clojurescript {:mvn/version "1.12.145"}
          com.bhauman/figwheel-main {:mvn/version "0.2.20"}
          nrepl/nrepl               {:mvn/version "1.7.0"}
-         cider/piggieback          {:mvn/version "0.7.0"}}
+         cider/piggieback          {:mvn/version "0.7.0"}
+         org.slf4j/slf4j-nop       {:mvn/version "2.0.9"}}
 
  :aliases
  {;; The interesting one: an nREPL server that boots the figwheel build and
