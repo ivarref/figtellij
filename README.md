@@ -1,5 +1,44 @@
 # figtellij
 
+> Because life is too short to type `(do (require 'figwheel.main.api) (figwheel.main.api/start "dev"))` in a REPL.
+
+Yep, that's the full purpose of this project.
+This project specifically
+targets [Cursive](https://cursive-ide.com/), hence the name.
+
+### What
+
+You want to start figwheel building with a single command. And then you _might_
+want to REPL directly into ClojureScript land.
+
+This project does exactly that. No convoluted commands to remember.
+
+[//]: # (: starts a figwheel build and automatically)
+[//]: # (attaches incoming REPL connections to ClojureScript.)
+
+### Defaults
+
+Default profile for figwheel: `dev`.
+
+Default nREPL port: `7888`.
+
+### How
+
+An easier way to jumpstart figwheel and optionally Cursive.
+
+
+## Installation
+
+TBD
+
+## Use
+
+TBD
+
+### Vibed?
+
+Yes, I vibecoded this.
+
 A tools.deps figwheel.main project whose nREPL server hands **every** session
 that connects a ClojureScript REPL on the running build. Connect from IntelliJ /
 Cursive, CIDER, `lein repl :connect`, whatever — you land in `cljs.user` without
@@ -37,7 +76,7 @@ You asked for a session that evaluates
 and for later clients to join it. This does the same thing, split in two, which
 is what makes the "later clients" half possible:
 
-- **At boot**, `figintellij.nrepl` starts the build with `:mode :serve`. Plain
+- **At boot**, `figtellij.nrepl` starts the build with `:mode :serve`. Plain
   `(start "dev")` defaults to `:mode :repl`, which starts a ClojureScript REPL on
   the calling thread — fine at a terminal, but it would make the build's lifetime
   depend on one privileged session, and `stop` / `repl-env` / `cljs-repl` are only
@@ -53,9 +92,9 @@ is what makes the "later clients" half possible:
 
   ```clojure
   ;; session A
-  cljs.user=> (swap! figintellij.core/app-state assoc :written-by :session-a)
+  cljs.user=> (swap! figtellij.core/app-state assoc :written-by :session-a)
   ;; session B
-  cljs.user=> @figintellij.core/app-state
+  cljs.user=> @figtellij.core/app-state
   {:reloads 0, :written-by :session-a}
   ```
 
@@ -141,16 +180,36 @@ closes, via the `:close` hook in the session's metadata, so reconnecting a REPL
 hands the claim to the new session.
 
 The choice is made when a session is **ready to attach**, not when it first
-speaks — by then the client's other sessions have shown up and can be counted. If
-the nth never arrives, the last session seen wins once the connection has been
-open for `:session-grace-ms` (2s), which is what keeps single-session clients
-(`lein repl :connect`, scripts) working:
+speaks — by then the client's other sessions have shown up and can be counted.
 
 | Sessions on the connection | Result |
 |---|---|
-| 1 | that one gets ClojureScript, after the grace period |
+| 1 | stays on the JVM — nothing attaches |
 | 2 | 1st JVM, **2nd ClojureScript** |
 | 3 | 1st JVM, **2nd ClojureScript**, 3rd JVM |
+
+Note the first row: `:session-grace-ms` is **off** (`nil`), so only the nth
+session is ever attached and a connection that never opens one is left entirely
+on the JVM. That's deliberate — it keeps the rule exact and predictable for
+Cursive — but it means single-session clients (`lein repl :connect`, scripts)
+don't get a ClojureScript REPL. Set `:session-grace-ms 2000` to bring back the
+fallback: after that long, the last session seen on the connection wins if the
+nth hasn't shown up.
+
+A session that is waiting for the nth to arrive gives up after
+`:connect-timeout-ms` and says so, which is the log line to look for if nothing
+attaches:
+
+```
+[auto-cljs] session 1dd9cc10-… left on the JVM — it is not session #2 on its
+connection, and that session never arrived.
+```
+
+**Ordering is by first message, not by `clone`.** nREPL's session middleware
+handles `clone` itself and never delegates it, so a session becomes visible to
+this middleware only when it first sends something. A session that is cloned but
+stays silent doesn't count — with the grace period off, that's enough to mean
+nothing attaches at all.
 
 Set `:attach-nth-session 1` if your client puts the REPL first, or `nil` to
 attach every session. Either way you can always move it by hand: `:cljs/quit` in
@@ -178,12 +237,13 @@ success and leaves you in ClojureScript.
 ### Tuning
 
 ```clojure
-(figintellij.auto-cljs/configure!
+(figtellij.auto-cljs/configure!
   {:enabled?            true
    :build-id            "dev"
    :quiet-ms            1000   ; silence required before handing off
    :attach-nth-session  2      ; which session on a connection gets it; nil = all
-   :session-grace-ms    2000   ; before falling back to the last session seen
+   :session-grace-ms    nil    ; nil = off; ms before falling back to the last
+                               ;   session seen when the nth never arrives
    :connect-timeout-ms 60000   ; how long to wait for a browser before giving up
    :attach-timeout-ms  60000   ; backstop on the hand-off itself
    :busy-ttl-ms        60000}) ; when an in-flight eval stops counting as in-flight
@@ -199,9 +259,9 @@ between forms.
 deps.edn                      ; :nrepl, :fig, :min aliases
 figwheel-main.edn             ; figwheel options; :mode :serve is merged in at boot
 dev.cljs.edn                  ; the "dev" build
-dev/figintellij/nrepl.clj     ; entry point: figwheel + nREPL + middleware wiring
-dev/figintellij/auto_cljs.clj ; the middleware
-src/figintellij/core.cljs     ; demo app
+dev/figtellij/nrepl.clj     ; entry point: figwheel + nREPL + middleware wiring
+dev/figtellij/auto_cljs.clj ; the middleware
+src/figtellij/core.cljs     ; demo app
 resources/public/index.html
 target/public/.gitkeep        ; see below
 ```
@@ -230,8 +290,10 @@ compiled output 404s until the next restart.
 Clojure 1.12.5 · ClojureScript 1.12.145 · figwheel-main 0.2.20 · piggieback 0.7.0
 · nREPL 1.7.0. Verified end to end on JDK 21: a Cursive-style bootstrap burst
 staying in Clojure and attaching after the quiet period, a 3s evaluation not
-being cut in half, connections of one/two/three sessions attaching exactly the
-right one each time (and a second connection still getting its own),
-`:attach-nth-session 1` flipping it, attaching a skipped session by hand, two
-sessions sharing one browser and compiler env, `:cljs/quit` and manual re-attach,
-the no-browser give-up and re-arm, and hot reload with `^:after-load`.
+being cut in half, two- and three-session connections attaching exactly the
+second one (and a second connection still getting its own), a single-session
+connection staying on the JVM with the grace period off, a late-arriving second
+session still winning, `:attach-nth-session 1` flipping it, attaching a skipped
+session by hand, two sessions sharing one browser and compiler env, `:cljs/quit`
+and manual re-attach, the no-browser give-up and re-arm, and hot reload with
+`^:after-load`.

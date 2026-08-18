@@ -1,4 +1,4 @@
-(ns figintellij.auto-cljs
+(ns figtellij.auto-cljs
   "nREPL middleware that gives every session its own ClojureScript REPL on a
   running figwheel.main build, without the client having to ask for one.
 
@@ -77,10 +77,12 @@
    ;; second, behind the one it keeps for JVM-side tooling. nil attaches all of
    ;; them.
    :attach-nth-session 2
-   ;; If the nth session never turns up, fall back to the last one seen on the
-   ;; connection once it has been open this long, so single-session clients still
-   ;; get a ClojureScript REPL.
-   :session-grace-ms   2000
+   ;; If set, and the nth session never turns up, fall back to the last one seen
+   ;; on the connection once it has been open this long — that is what would let
+   ;; a single-session client still get a ClojureScript REPL. nil turns the
+   ;; fallback off: only the nth session is ever attached, and a connection that
+   ;; never opens one is left entirely on the JVM.
+   :session-grace-ms   nil
    ;; Once a session is quiet, how long to keep waiting for a browser to connect
    ;; to the build before giving up (and saying so). Evaluating again re-arms it.
    :connect-timeout-ms 60000
@@ -198,12 +200,12 @@
 
 (defn- target-session
   "Which session on this connection should get the ClojureScript REPL: the
-  configured ordinal, or — once the connection has been around for
-  `:session-grace-ms` and the ordinal never showed up — the last one seen."
+  configured ordinal, or — when `:session-grace-ms` is set, the connection has
+  been around that long, and the ordinal never showed up — the last one seen."
   [{:keys [seen since]}]
   (let [{:keys [attach-nth-session session-grace-ms]} @config]
     (or (get seen (dec attach-nth-session))
-        (when (>= (- (now) since) session-grace-ms)
+        (when (and session-grace-ms (>= (- (now) since) session-grace-ms))
           (peek seen)))))
 
 (defn- claim
@@ -270,13 +272,13 @@
 (defn- skip!
   "Leave this session on the JVM. Reported to the server console only: the point
   of the rule is to stop a client's extra sessions producing noise."
-  [st]
+  [st reason]
   (when (not= :skipped (:phase @st))
     (swap! st assoc :phase :skipped)
-    (log! (format (str "session %s left on the JVM — its connection already has a "
-                       "ClojureScript session. Evaluate (figwheel.main.api/cljs-repl %s) "
-                       "in it to attach it by hand.")
+    (log! (format (str "session %s left on the JVM — %s "
+                       "Evaluate (figwheel.main.api/cljs-repl %s) in it to attach it by hand.")
                   (:id (meta (:session @st)))
+                  reason
                   (pr-str (:build-id @config))))))
 
 (defn- try-attach!
@@ -302,9 +304,10 @@
 
         :else
         (case (if attach-nth-session (claim transport session) :owner)
-          ;; the session that should have it hasn't gone quiet yet
-          :not-yet :retry
-          :taken   (do (skip! st) :done)
+          ;; the session that should have it hasn't turned up yet
+          :not-yet :not-yet
+          :taken   (do (skip! st "its connection already has a ClojureScript session.")
+                       :done)
           :owner
           (do
             (swap! st assoc :phase :attaching)
@@ -350,8 +353,22 @@
         (let [repl-env (fig/repl-env build-id)] ; nil until the build is registered
           (cond
             (and repl-env (js-env-connected? repl-env))
-            (if (= :retry (try-attach! st))
-              (schedule! st quiet-ms)
+            (case (try-attach! st)
+              ;; the session got busy again between deciding and attaching
+              :retry (do (swap! st dissoc :not-yet-since)
+                         (schedule! st quiet-ms))
+              ;; waiting for the session that should own the connection's REPL.
+              ;; Bounded, because with :session-grace-ms off nothing else will
+              ;; ever resolve this — a connection can simply never open one.
+              :not-yet
+              (let [since (or (:not-yet-since @st) (now))]
+                (swap! st assoc :not-yet-since since)
+                (if (>= (- (now) since) connect-timeout-ms)
+                  (do (skip! st (format (str "it is not session #%d on its connection, "
+                                             "and that session never arrived.")
+                                        (:attach-nth-session @config)))
+                      (swap! st assoc :watching? false))
+                  (schedule! st quiet-ms)))
               (swap! st assoc :watching? false))
 
             (>= (- (now) armed-at) connect-timeout-ms) (give-up! st build-id)

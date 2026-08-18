@@ -1,4 +1,4 @@
-(ns figintellij.nrepl
+(ns figtellij.nrepl
   "nREPL server that boots a figwheel.main build and hands every session that
   connects a ClojureScript REPL on it.
 
@@ -7,7 +7,7 @@
    [cider.piggieback :as piggieback]
    [clojure.edn :as edn]
    [clojure.java.io :as io]
-   [figintellij.auto-cljs :as auto-cljs]
+   [figtellij.auto-cljs :as auto-cljs]
    [figwheel.main.api :as fig]
    [nrepl.server :as nrepl])
   (:gen-class))

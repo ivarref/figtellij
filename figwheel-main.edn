@@ -1,7 +1,7 @@
 ;; Figwheel Main options.
 ;;
-;; `figintellij.nrepl` reads this file and merges `:mode :serve` over it, so the
+;; `figtellij.nrepl` reads this file and merges `:mode :serve` over it, so the
 ;; build starts a server + watcher without also trying to take over the JVM's
 ;; main thread with a REPL. Everything else you put here applies as usual.
-{:watch-dirs ["src"]
+{:watch-dirs ["dev"]
  :css-dirs   ["resources/public/css"]}
